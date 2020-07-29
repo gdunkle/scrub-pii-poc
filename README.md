@@ -3,7 +3,7 @@ POC to see if comprehend medical can be used to redact pii data wihtin recommend
 
 ## Deploying the stack
 * Clone the repository
-* Open a terminal and C\configure the bucket name of your target Amazon S3 distribution bucket and region where you'd like to deploy
+* Open a terminal and configure the bucket name of your target Amazon S3 distribution bucket and region where you'd like to deploy
 ```
 export SOLUTION_NAME=textract-comprehend-medical-pii-poc
 export DIST_OUTPUT_BUCKET=<S3 bucket to deploy the solution>
@@ -15,8 +15,8 @@ _Note:_ You have to manually create an S3 bucket with the name "$DIST_OUTPUT_BUC
 * Next make the deploy script executable and run it
 ```
 cd ./deployment
-chmod +x ./run.sh  \n
-./run.sh
+chmod +x ./deploy.sh  \n
+./deploy.sh
 ```
 
 
