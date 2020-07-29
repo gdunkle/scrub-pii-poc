@@ -18,6 +18,8 @@ cd ./deployment
 chmod +x ./deploy.sh  \n
 ./deploy.sh
 ```
+_Note:_ This POC is most easily deployed from a [Cloud9](https://aws.amazon.com/cloud9/) environment
+
 ## Architecture
 
 ![ScrubPiiPoc](images/ScrubPiiPoc.png)
