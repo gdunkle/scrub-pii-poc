@@ -20,6 +20,8 @@ chmod +x ./deploy.sh  \n
 ```
 _Note:_ This POC is most easily deployed from a [Cloud9](https://aws.amazon.com/cloud9/) environment
 
+* Once deployed upload a pdf document to the RawDocumentBucket in S3. Make sure the document's name does not contain any spaces.
+* If successful, a text file will be created in the ExtractedDocumentBucket that containers the original document text with the PII information removed.
 ## Architecture
 
 ![ScrubPiiPoc](images/ScrubPiiPoc.png)
