@@ -1,0 +1,391 @@
+# Textract Macie POC
+#
+# 
+# **DO NOT DELETE**
+#
+# author: aws-solutions-builder@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: () - Textract Macie POC - Master Template
+
+Parameters:
+  # Sample parameter 1
+  RawDocumentBucketName:
+    Description: Bucket name where raw documents are dropped
+    Type: String
+    Default: %%SOLUTION_NAME%%-raw-documents
+  ExtractedDocumentBucketName:
+    Description: Bucket name where documents textract outputs are dropped
+    Type: String
+    Default: %%SOLUTION_NAME%%-extracted-documents
+  WorkingDocumentBucketName:
+    Description: Bucket name where documents being cleaned and assembled are stored
+    Type: String
+    Default: %%SOLUTION_NAME%%-tmp-documents
+
+
+Mappings:
+  MetricsMap:
+    Send-Data:
+      SendAnonymousData: "Yes" # change to 'No' if needed
+
+  SourceCode:
+    General:
+      S3Bucket: %%BUCKET_NAME%%
+      KeyPrefix: "%%SOLUTION_NAME%%/%%VERSION%%"
+
+Resources:
+  RawDocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: !Ref RawDocumentBucketName
+      NotificationConfiguration:
+        LambdaConfigurations:
+        - Event: 's3:ObjectCreated:*'
+          Function: !GetAtt RunTextractFunction.Arn
+  RawDocumentBucketPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref RunTextractFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${RawDocumentBucketName}"
+  ExtractedDocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: !Ref ExtractedDocumentBucketName
+  WorkingDocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: !Ref WorkingDocumentBucketName
+  ##
+  #  RunTextractFunction
+  ##
+  RunTextractFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+              - lambda.amazonaws.com
+              - textract.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: !Sub RunTextractFunction-Policy-${AWS::StackName}-${AWS::Region}
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: 
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+          - Effect: Allow
+            Action:
+            - textract:StartDocumentTextDetection
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - s3:GetObject*
+            Resource: 
+            - !Sub arn:aws:s3:::${RawDocumentBucketName}/*
+          - Effect: Allow
+            Action:
+            - sns:Publish
+            - sns:Subscribe
+            - sns:ListSubscriptionsByTopic
+            - sns:Recieve
+            Resource: 
+            - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:textract-macie-poc-analysis-topic
+  RunTextractFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Run textract on document uploaded to s3 bucket
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+          TOPIC_ARN: !Ref TextractAnalysisTopic
+          ROLE_ARN: !GetAtt RunTextractFunctionRole.Arn
+      Handler: run_textract.lambda_handler
+      Role: !GetAtt RunTextractFunctionRole.Arn
+      Code:
+        S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+      Runtime: python3.8
+      Timeout: 300
+  ##
+  #  GetTextractResultsFunction
+  ##
+  GetTextractResultsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+              - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: !Sub GetTextractResultsFunction-Policy-${AWS::StackName}-${AWS::Region}
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: 
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+          - Effect: Allow
+            Action:
+            - comprehendmedical:DetectPHI 
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - textract:GetDocumentTextDetection
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - s3:GetObject*
+            - s3:PutObject*
+            - s3:DeleteObject*
+            Resource: 
+            - !Sub arn:aws:s3:::${WorkingDocumentBucketName}/*
+  GetTextractResultsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Gets the textract results and run them through comprehend medical
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+          WORKING_BUCKET: !Ref WorkingDocumentBucket
+      Handler: get_textract_results.lambda_handler
+      Role: !GetAtt GetTextractResultsFunctionRole.Arn
+      Code:
+        S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+      Runtime: python3.8
+      Timeout: 300
+  ##
+  #  GetTextractJobStatusFunction
+  ##
+  GetTextractJobStatusFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+              - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: !Sub GetTextractJobStatusFunction-Policy-${AWS::StackName}-${AWS::Region}
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: 
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+          - Effect: Allow
+            Action:
+            - textract:GetDocumentTextDetection
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - states:StartExecution
+            Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${WriteTextractResultsStateMachine.Name}
+  GetTextractJobStatusFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Gets the textract job status and kicks off the step function
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+          STEP_FUNCTION: !Ref WriteTextractResultsStateMachine
+      Handler: get_textract_job_status.lambda_handler
+      Role: !GetAtt GetTextractJobStatusFunctionRole.Arn
+      Code:
+        S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+      Runtime: python3.8
+      Timeout: 300
+  ##
+  #  MoveDocumentsFunction
+  ##
+  MoveDocumentsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+              - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: !Sub MoveDocumentsFunctionRole-Policy-${AWS::StackName}-${AWS::Region}
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: 
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            Resource: '*'
+          
+  MoveDocumentsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Moved the scrubbed file to the destination bucket
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+          DESTINATION_BUCKET: !Ref ExtractedDocumentBucket
+      Handler: move_documents.lambda_handler
+      Role: !GetAtt MoveDocumentsFunctionRole.Arn
+      Code:
+        S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+      Runtime: python3.8
+      Timeout: 300
+   
+  
+  TextractAnalysisTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: textract-macie-poc-analysis-topic
+      TopicName: textract-macie-poc-analysis-topic
+      Subscription: 
+       -  Endpoint: !GetAtt GetTextractJobStatusFunction.Arn
+          Protocol: lambda
+  TextractAnalysisTopicPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref GetTextractJobStatusFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref TextractAnalysisTopic 
+  WriteTextractResultsStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: /aws/states/WriteTextractResultsStateMachine
+      RetentionInDays: 1
+  WriteTextractResultsStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+              - states.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub WriteTextractResultsStateMachine-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+                - Effect: Allow
+                  Action:
+                    - xray:PutTraceSegments
+                    - xray:PutTelemetryRecords
+                    - xray:GetSamplingRules
+                    - xray:GetSamplingTargets
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - lambda:InvokeFunction
+                  Resource: 
+                    - !GetAtt GetTextractResultsFunction.Arn
+                    - !GetAtt MoveDocumentsFunction.Arn
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogDelivery
+                    - logs:GetLogDelivery
+                    - logs:UpdateLogDelivery
+                    - logs:DeleteLogDelivery
+                    - logs:ListLogDeliveries
+                    - logs:PutResourcePolicy
+                    - logs:DescribeResourcePolicies
+                    - logs:DescribeLogGroups
+          
+                  Resource: '*'
+  WriteTextractResultsStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties: 
+      StateMachineName: WriteTextractResultsStateMachine
+      DefinitionString: |-
+        {
+          "StartAt": "GatherResults",
+          "States": {
+            "GatherResults": {
+              "Type": "Task",
+              "Resource": "${GatherResultsFunction}",
+              "Next": "AreAllResultsProccessed"
+            },
+            "AreAllResultsProccessed":{
+              "Type":"Choice",
+              "Choices": [
+                    {
+                        "Variable": "$.continue",
+                        "BooleanEquals": true,
+                        "Next": "GatherResults"
+                    }
+                ],
+                "Default": "MoveDocuments"
+            },
+            "MoveDocuments": {
+              "Type": "Task",
+              "Resource": "${MoveDocumentsFunction}",
+              "Next": "Done"
+            },
+            "Done": {
+                    "Type": "Pass",
+                    "End": true
+                  
+             }
+          }
+        }
+      DefinitionSubstitutions: 
+        GatherResultsFunction: !GetAtt GetTextractResultsFunction.Arn
+        MoveDocumentsFunction: !GetAtt MoveDocumentsFunction.Arn
+      LoggingConfiguration: 
+        Destinations: 
+          - CloudWatchLogsLogGroup: 
+              LogGroupArn: !GetAtt WriteTextractResultsStateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      RoleArn: !GetAtt WriteTextractResultsStateMachineRole.Arn
+
+# Outputs:
+            
