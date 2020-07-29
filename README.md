@@ -51,6 +51,7 @@ chmod +x ./deploy.sh  \n
         * If false go to MoveDocuments
     * MoveDocuments copies the working document to the ExtractedDocumentBucket and delete the working copy out of the WorkingDocumentBucket
         
+## Legal stuff
 
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
