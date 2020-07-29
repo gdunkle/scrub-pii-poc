@@ -1,4 +1,4 @@
-# textract-comprehend-medical-poc
+# scrub-pii-poc
 POC to see if comprehend medical can be used to redact pii data wihtin recommendation letters processed by textract
 
 ## Deploying the stack
@@ -18,7 +18,9 @@ cd ./deployment
 chmod +x ./deploy.sh  \n
 ./deploy.sh
 ```
+## Architecture
 
+![ScrubPiiPoc](images/ScrubPiiPoc.png)
 
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
