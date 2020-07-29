@@ -36,7 +36,7 @@ chmod +x ./deploy.sh  \n
     ```json
     {
         "job_id": "The textract Job Id",
-        "next_token": "The textract job next page token, if available"
+        "next_token": "The textract job next page token, if available",
         "continue": "Boolean whether indicating wheter there are more pages to process",
         "document": {
             "Bucket": "Working document s3 bucket",
