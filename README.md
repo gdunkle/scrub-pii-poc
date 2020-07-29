@@ -22,6 +22,36 @@ chmod +x ./deploy.sh  \n
 
 ![ScrubPiiPoc](images/ScrubPiiPoc.png)
 
+* Documents are uploaded to the RawDocumentBucket
+* RunTextFunction is triggered by the document creation
+    * Document is asynchronously processed by Textract
+* Textract publishes a notification to the TextractAnalysisTopic
+* GetTextractJobStatusFunction is invoked through an SNS subscription to the TextractAnalysisTopic
+    * If the Textract job was successful the JobId is submitted to the WriteTextractResultsStateMachine
+* The GetTextractResultsFunction uses the JobId and the NextToken (if present) to process a page of textract results. 
+    * It groups the LINE and WORD results into groups of ~100 characters and then runs them through Comprehend Medical to detect PII.
+        * If PII is detected the word(s) are replaced with "<TYPE_OF_PII>"
+    * Once all blocks in the page are processed the scrubbed text is written to a working document in s3. This is because there is a character limit on the input/output that step functions can pass around.
+    * GetTextractResultsFunction then outputs the following data
+    ```json
+    {
+        "job_id": "The textract Job Id",
+        "next_token": "The textract job next page token, if available"
+        "continue": "Boolean whether indicating wheter there are more pages to process",
+        "document": {
+            "Bucket": "Working document s3 bucket",
+            "Key": "Working document s3 key"
+            
+        }
+        
+    }
+    ```
+    * AreAllResultsProcessed checks $.continue 
+        * If true go back to GetTextractResultsFunction and process the next page
+        * If false go to MoveDocuments
+    * MoveDocuments copies the working document to the ExtractedDocumentBucket and delete the working copy out of the WorkingDocumentBucket
+        
+
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 Licensed under the Apache License Version 2.0 (the "License"). You may not use this file except in compliance with the License. A copy of the License is located at
