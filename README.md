@@ -50,7 +50,11 @@ chmod +x ./deploy.sh  \n
         * If true go back to GetTextractResultsFunction and process the next page
         * If false go to MoveDocuments
     * MoveDocuments copies the working document to the ExtractedDocumentBucket and delete the working copy out of the WorkingDocumentBucket
-        
+
+## Known issues
+
+* There is a bug if the original document uploaded has spaces in the file name 🤦🏻‍♂️
+
 ## Legal stuff
 
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
