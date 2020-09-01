@@ -6,7 +6,7 @@
 # author: aws-solutions-builder@
 AWSTemplateFormatVersion: 2010-09-09
 
-Description: () - Textract Macie POC - Master Template
+Description: () - Textract / Comprehend Medical POC - Master Template
 
 Parameters:
   # Sample parameter 1
@@ -18,8 +18,12 @@ Parameters:
     Description: Bucket name where documents textract outputs are dropped
     Type: String
     Default: %%SOLUTION_NAME%%-extracted-documents
+  CleanedDocumentBucketName:
+    Description: Bucket name where documents that have been cleaned  are stored
+    Type: String
+    Default: %%SOLUTION_NAME%%-cleaned-documents
   WorkingDocumentBucketName:
-    Description: Bucket name where documents being cleaned and assembled are stored
+    Description: Bucket name where documents being assembled are stored
     Type: String
     Default: %%SOLUTION_NAME%%-tmp-documents
 
@@ -55,6 +59,27 @@ Resources:
     Type: AWS::S3::Bucket
     Properties: 
       BucketName: !Ref ExtractedDocumentBucketName
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt RunComprehendFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: 'suffix'
+                    Value: 'txt'
+  ExtractedDocumentBucketPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref RunComprehendFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${ExtractedDocumentBucketName}"
+  CleanedDocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref CleanedDocumentBucketName
   WorkingDocumentBucket:
     Type: AWS::S3::Bucket
     Properties: 
@@ -103,7 +128,7 @@ Resources:
             - sns:ListSubscriptionsByTopic
             - sns:Recieve
             Resource: 
-            - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:textract-macie-poc-analysis-topic
+            - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:%%SOLUTION_NAME%%-analysis-topic
   RunTextractFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -120,6 +145,21 @@ Resources:
         S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
       Runtime: python3.8
       Timeout: 300
+  TextractAnalysisTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: %%SOLUTION_NAME%%-analysis-topic
+      TopicName: %%SOLUTION_NAME%%-analysis-topic
+      Subscription:
+        - Endpoint: !GetAtt GetTextractJobStatusFunction.Arn
+          Protocol: lambda
+  TextractAnalysisTopicPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref GetTextractJobStatusFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref TextractAnalysisTopic
   ##
   #  GetTextractResultsFunction
   ##
@@ -147,10 +187,6 @@ Resources:
             - logs:PutLogEvents
             Resource: 
               - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
-          - Effect: Allow
-            Action:
-            - comprehendmedical:DetectPHI 
-            Resource: '*'
           - Effect: Allow
             Action:
             - textract:GetDocumentTextDetection
@@ -276,28 +312,119 @@ Resources:
         S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
       Runtime: python3.8
       Timeout: 300
+  ##
+  #  RunComprehendFunction
+  ##
+  PHIDetectionJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - comprehendmedical.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub PHIDetectionJobRole-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub arn:aws:s3:::${ExtractedDocumentBucketName}/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${ExtractedDocumentBucketName}
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${CleanedDocumentBucketName}/*
+
+  RunComprehendFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub RunComprehendFunction-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+              - Effect: Allow
+                Action:
+                  - comprehendmedical:StartPHIDetectionJob
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:PassRole
+                Resource: !GetAtt PHIDetectionJobRole.Arn
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:List*
+                Resource:
+                  - !Sub arn:aws:s3:::${ExtractedDocumentBucketName}/*
+              - Effect: Allow
+                Action:
+                  - s3:PutObject*
+                Resource:
+                  - !Sub arn:aws:s3:::${CleanedDocumentBucketName}/*
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ComprehendScrubPiiStateMachine.Name}
+  RunComprehendFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Run comprehend on documents dropped in extract bucket
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+          DESTINATION_BUCKET: !Ref CleanedDocumentBucket
+          DATA_ACCESS_ROLE: !GetAtt PHIDetectionJobRole.Arn
+          STEP_FUNCTION: !Ref ComprehendScrubPiiStateMachine
+      Handler: run_comprehend.lambda_handler
+      Role: !GetAtt RunComprehendFunctionRole.Arn
+      Code:
+        S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+      Runtime: python3.8
+      Timeout: 300
    
   
-  TextractAnalysisTopic:
-    Type: AWS::SNS::Topic
-    Properties: 
-      DisplayName: textract-macie-poc-analysis-topic
-      TopicName: textract-macie-poc-analysis-topic
-      Subscription: 
-       -  Endpoint: !GetAtt GetTextractJobStatusFunction.Arn
-          Protocol: lambda
-  TextractAnalysisTopicPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: 'lambda:InvokeFunction'
-      FunctionName: !Ref GetTextractJobStatusFunction
-      Principal: sns.amazonaws.com
-      SourceArn: !Ref TextractAnalysisTopic 
+
+  ##
+  #  WriteTextractResultsStateMachine
+  ##
   WriteTextractResultsStateMachineLogGroup:
     Type: AWS::Logs::LogGroup
     Properties: 
       LogGroupName: /aws/states/WriteTextractResultsStateMachine
       RetentionInDays: 1
+
   WriteTextractResultsStateMachineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -376,7 +503,7 @@ Resources:
              }
           }
         }
-      DefinitionSubstitutions: 
+      DefinitionSubstitutions:
         GatherResultsFunction: !GetAtt GetTextractResultsFunction.Arn
         MoveDocumentsFunction: !GetAtt MoveDocumentsFunction.Arn
       LoggingConfiguration: 
@@ -386,6 +513,169 @@ Resources:
         IncludeExecutionData: true
         Level: ALL
       RoleArn: !GetAtt WriteTextractResultsStateMachineRole.Arn
+  ##
+  #  GetComprehendJobStatusFunction
+  ##
+  GetComprehendJobStatusFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub GetComprehendJobStatusFunction-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+              - Effect: Allow
+                Action:
+                  - comprehendmedical:DescribePHIDetectionJob
+                Resource: '*'
 
+  GetComprehendJobStatusFunction:
+      Type: AWS::Lambda::Function
+      Properties:
+        Description: Gets the comprehend job status
+        Environment:
+          Variables:
+            LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+
+        Handler: get_comprehend_job_status.lambda_handler
+        Role: !GetAtt GetComprehendJobStatusFunctionRole.Arn
+        Code:
+          S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+          S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+        Runtime: python3.8
+        Timeout: 300
+  ##
+  # ComprehendScrubPii
+  ##
+  ComprehendScrubPiiStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/states/ComprehendScrubPiiStateMachine
+      RetentionInDays: 1
+  ComprehendScrubPiiStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: ComprehendScrubPiiStateMachine
+      DefinitionString: |-
+        {
+          "StartAt": "JobStatusChoice",
+          "States": {
+
+            "JobStatusChoice":{
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Or": [
+                    {
+                     "Variable": "$.comprehend_medical.JobStatus",
+                     "StringEquals": "COMPLETED"
+                    },
+                    {
+                     "Variable": "$.comprehend_medical.JobStatus",
+                     "StringEquals": "PARTIAL_SUCCESS"
+                     }
+                  ],
+                  "Next": "ScrubPii"
+                },
+                {
+                  "Variable": "$.comprehend_medical.JobStatus",
+                   "StringEquals": "FAILED",
+                   "Next": "Failed"
+                }
+
+              ],
+              "Default": "WaitTenSeconds"
+            },
+            "GetComprehendJobStatus": {
+               "Type": "Task",
+               "Resource": "${GetComprehendJobStatusFunction}",
+               "Next": "JobStatusChoice"
+             },
+            "WaitTenSeconds": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "GetComprehendJobStatus"
+            },
+            "Failed": {
+              "Type": "Fail",
+              "Cause": "Job status failed",
+              "Error": "JobStatusFailed"
+            },
+            "ScrubPii": {
+              "Type": "Pass",
+              "Next": "Done"
+             },
+            "Done": {
+              "Type": "Pass",
+              "End": true
+             }
+          }
+        }
+      DefinitionSubstitutions:
+        GetComprehendJobStatusFunction: !GetAtt GetComprehendJobStatusFunction.Arn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt ComprehendScrubPiiStateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      RoleArn: !GetAtt ComprehendScrubPiiStateMachineRole.Arn
+  ComprehendScrubPiiStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub ComprehendScrubPiiStateMachine-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt GetComprehendJobStatusFunction.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+
+                Resource: '*'
 # Outputs:
             

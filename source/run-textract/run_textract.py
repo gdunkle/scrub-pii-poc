@@ -25,26 +25,30 @@ import boto3
 def lambda_handler(event, context):
     try:
         logging.debug(event)
-        bucket_name = event['Records'][0]['s3']['bucket']['name']
-        file_key = event['Records'][0]['s3']['object']['key']
-        bucket_region = event['Records'][0]['awsRegion']
+        responses=[]
+        for records in event['Records']:
+            bucket_name = records['s3']['bucket']['name']
+            file_key = records['s3']['object']['key']
+            bucket_region = records['awsRegion']
         
-        session = boto3.session.Session(region_name=bucket_region)
-        textract = session.client('textract')
-        logging.info('Running Textract on %s/%s and posting to topic %s with role %s' % (bucket_name,file_key,os.environ.get('TOPIC_ARN'),os.environ.get('ROLE_ARN')))
-        response = textract.start_document_text_detection(
-            DocumentLocation={
-                'S3Object': {
-                    'Bucket': bucket_name,
-                    'Name': file_key
+            session = boto3.session.Session(region_name=bucket_region)
+            textract = session.client('textract')
+            logging.info('Running Textract on %s/%s and posting to topic %s with role %s' % (bucket_name,file_key,os.environ.get('TOPIC_ARN'),os.environ.get('ROLE_ARN')))
+            response = textract.start_document_text_detection(
+                DocumentLocation={
+                    'S3Object': {
+                        'Bucket': bucket_name,
+                        'Name': file_key
+                    }
+                },
+                JobTag=file_key,
+                NotificationChannel={
+                    'SNSTopicArn': os.environ.get('TOPIC_ARN'),
+                    'RoleArn': os.environ.get('ROLE_ARN')
                 }
-            },
-            NotificationChannel={
-                'SNSTopicArn': os.environ.get('TOPIC_ARN'),
-                'RoleArn': os.environ.get('ROLE_ARN')
-            }
-        )
-        return json.dumps(response)
+            )
+            responses.append(response)
+        return json.dumps(responses)
     except Exception as error:
         logging.error('lambda_handler error: %s' % (error))
         logging.error('lambda_handler trace: %s' % traceback.format_exc())
