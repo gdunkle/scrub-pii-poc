@@ -28,13 +28,15 @@ def lambda_handler(event, context):
         textract_notification_msg=json.loads(event["Records"][0]["Sns"]["Message"])
         status=textract_notification_msg["Status"]
         job_id=textract_notification_msg["JobId"]
+        original_file_name = textract_notification_msg["DocumentLocation"]["S3ObjectName"]
         if status=="SUCCEEDED":
             
             input = {
                 "job_id":job_id,
                 "next_token": None,
                 "continue": "true",
-                "document": None
+                "document": None,
+                "file_name": original_file_name
             }
             step_functions = boto3.client('stepfunctions')
             step_function_arn = str(os.environ.get('STEP_FUNCTION'))

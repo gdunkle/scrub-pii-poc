@@ -22,43 +22,50 @@ import traceback
 import sys
 import boto3
 
+
 def lambda_handler(event, context):
     try:
+        logging.debug(event)
         comprehend_medical = boto3.client('comprehendmedical')
         textract = boto3.client('textract')
-        
+
         s3 = boto3.client('s3')
         logging.debug(event)
-        
+
         job_id = event["job_id"]
         next_token = event["next_token"]
         proceed = event["continue"]
         document = event["document"]
+        file_name = event["file_name"]
         input = {
             "JobId": job_id,
             "MaxResults": 100
         }
         if next_token is not None:
-            input["NextToken"]=next_token
-        response = text_detection_results=textract.get_document_text_detection(**input)
+            input["NextToken"] = next_token
+        response = text_detection_results = textract.get_document_text_detection(**input)
         blocks = response["Blocks"]
-        processed_blocks=[x for x in [get_block_value(block) for block in blocks ] if x is not None]
-        units=group_blocks_into_units(processed_blocks,0)
-        scrubbed_data=[ scub_data(unit,comprehend_medical) for unit in units]
+        processed_blocks = [x for x in [get_block_value(block) for block in blocks] if x is not None]
+        units = group_blocks_into_units(processed_blocks, 0)
+        scrubbed_data = [scrub_data(unit, comprehend_medical) for unit in units]
         logging.debug(scrubbed_data)
-        text=append_results_to_working_document_text(document,scrubbed_data,s3)
+
+        text = append_results_to_working_document_text(document, scrubbed_data, s3)
         if document is None:
             document = {
                 "Bucket": str(os.environ.get('WORKING_BUCKET')),
                 "Key": job_id
             }
-        write_text_to_s3(document,text,s3)
-        next_token= response["NextToken"] if "NextToken" in response else None 
+        if text is not None:
+            logging.debug(text)
+            write_text_to_s3(document, text, s3)
+        next_token = response["NextToken"] if "NextToken" in response else None
         result = {
-            "job_id":job_id,
+            "job_id": job_id,
             "next_token": next_token,
             "continue": next_token is not None,
-            "document": document
+            "document": document,
+            "file_name": file_name
         }
         logging.info("Result: %s" % result)
         return result
@@ -67,60 +74,70 @@ def lambda_handler(event, context):
         logging.error('lambda_handler trace: %s' % traceback.format_exc())
         result = {
             'statusCode': '500',
-            'body':  {'message': 'error'}
+            'body': {'message': 'error'}
         }
         return json.dumps(result)
-        
-def append_results_to_working_document_text(document,results,s3):
-    if document is not None:
-        obj = s3.get_object(Bucket=document["Bucket"],Key=document["Key"])
-        text=obj['Body'].read().decode('utf-8')
-        return text+(" ".join(results))
+
+
+def append_results_to_working_document_text(document, new_results, s3):
+    result = None
+    if document is not None and new_results is not None:
+        obj = s3.get_object(Bucket=document["Bucket"], Key=document["Key"])
+        text = obj['Body'].read().decode('utf-8')
+        result = text + "\n" + ("\n".join(new_results))
+    elif new_results is not None:
+        result = "\n".join(new_results)
+    return result
+
+
+def write_text_to_s3(document, text, s3):
+    s3.put_object(Body=text, Bucket=document["Bucket"], Key=document["Key"])
+
+
+def get_block_value(block: dict) -> str:
+    block_type = block["BlockType"]
+    return block["Text"] if block_type in ["LINE"] else None
+
+
+def scrub_data(unit, comprehend_medical):
+    response = comprehend_medical.detect_phi(Text=unit)
+    if len(response["Entities"]) > 0:
+        for entity in response["Entities"]:
+            unit = unit.replace(entity["Text"], "<%s>" % entity["Type"])
     else:
-        return " ".join(results)
+        logging.debug("No PII data found in '%s'" % unit)
+    return unit
 
-def write_text_to_s3(document,text,s3):
-    s3.put_object(Body=text, Bucket=document["Bucket"],Key=document["Key"])
-    
-def get_block_value(block:dict)->str:
-    block_type=block["BlockType"]
-    return block["Text"] if block_type in ["LINE","WORD"] else None
 
-def scub_data(unit,comprehend_medical):
-   response = comprehend_medical.detect_phi(Text=unit)
-   if len(response["Entities"])>0:
-       for entity in response["Entities"]:
-           unit = unit.replace(entity["Text"],"<%s>"%entity["Type"])
-   else:
-        logging.debug("No PII data found in '%s'" %unit)
-   return unit
-    
-
-def group_blocks_into_units(processed_blocks,index):
-    unit_str=""
-    results=[]
-    for i in range(index,len(processed_blocks)):
-        block=processed_blocks[i]
-        unit_str = block if len(unit_str)==0 else "%s %s" % (unit_str,block)
-        if len(unit_str)>=100:
+def group_blocks_into_units(processed_blocks, index):
+    unit_str = ""
+    results = []
+    logging.debug(f"group_blocks_into_units.processed_blocks {processed_blocks},{index}")
+    if processed_blocks is not None and len(processed_blocks) > 0:
+        for i in range(index, len(processed_blocks)):
+            block = processed_blocks[i]
+            unit_str = block if len(unit_str) == 0 else "%s\n%s" % (unit_str, block)
+            if len(unit_str) % 100 == 0 or len(unit_str) >= 10000:
+                results.append(unit_str)
+                unit_str = ""
+                break
+        if unit_str != "":
             results.append(unit_str)
-            unit_str=""
-            break
-    if unit_str != "":
-        results.append(unit_str)
-    if (i+1) < len(processed_blocks):
-        results=results+group_blocks_into_units(processed_blocks,i+1)
+        if (i + 1) < len(processed_blocks):
+            results = results + group_blocks_into_units(processed_blocks, i + 1)
     return results
+
 
 def init_logger():
     global log_level
     log_level = str(os.environ.get('LOG_LEVEL')).upper()
     if log_level not in [
-                            'DEBUG', 'INFO',
-                            'WARNING', 'ERROR',
-                            'CRITICAL'
-                        ]:
+        'DEBUG', 'INFO',
+        'WARNING', 'ERROR',
+        'CRITICAL'
+    ]:
         log_level = 'ERROR'
     logging.getLogger().setLevel(log_level)
+
 
 init_logger()

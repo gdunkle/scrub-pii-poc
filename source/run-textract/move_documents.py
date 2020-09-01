@@ -28,11 +28,15 @@ def lambda_handler(event, context):
         logging.debug(event)
         job_id = event["job_id"]
         tmp_document = event["document"]
+        file_name = event["file_name"]
         destination_document = {
             "Bucket": str(os.environ.get('DESTINATION_BUCKET')),
-            "Key": job_id
+            "Key": f"{job_id}/extracted.txt"
         }
-        response=s3.copy_object(Bucket=destination_document["Bucket"],Key=destination_document["Key"],CopySource=tmp_document)
+        response = s3.copy_object(Bucket=destination_document["Bucket"], Key=destination_document["Key"],
+                                  CopySource=tmp_document, Metadata={
+                'x-amz-meta-original-file-name': file_name
+            }, MetadataDirective="REPLACE")
         logging.info(response)
         logging.info("Deleting tmp document %s" % tmp_document)
         s3.delete_object(Bucket=tmp_document["Bucket"],Key=tmp_document["Key"])
