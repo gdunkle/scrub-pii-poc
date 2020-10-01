@@ -102,11 +102,29 @@ def get_block_value(block: dict) -> str:
 def scrub_data(unit, comprehend_medical):
     response = comprehend_medical.detect_phi(Text=unit)
     if len(response["Entities"]) > 0:
+        phi_values_to_replace = {}
         for entity in response["Entities"]:
-            unit = unit.replace(entity["Text"], "<%s>" % entity["Type"])
+            if entity["Type"] in phi_values_to_replace:
+                phi_values_to_replace[entity["Type"]].append(entity["Text"])
+            else:
+                phi_values_to_replace[entity["Type"]] = [entity["Text"]]
+
+        unit = replace_phi_values(unit, phi_values_to_replace)
     else:
         logging.debug("No PII data found in '%s'" % unit)
     return unit
+
+
+def replace_phi_values(in_string: str, phi_values_to_replace: dict) -> str:
+    for key, value in phi_values_to_replace.items():
+        in_string = replace_phi_values_of_type(in_string, key, value)
+    return in_string
+
+
+def replace_phi_values_of_type(in_string: str, type: str, values) -> str:
+    for value in sorted(values, key=len, reverse=True):
+        in_string = in_string.replace(value, "<%s>" % type)
+    return in_string
 
 
 def group_blocks_into_units(processed_blocks, index):
@@ -117,7 +135,7 @@ def group_blocks_into_units(processed_blocks, index):
         for i in range(index, len(processed_blocks)):
             block = processed_blocks[i]
             unit_str = block if len(unit_str) == 0 else "%s\n%s" % (unit_str, block)
-            if len(unit_str) % 100 == 0 or len(unit_str) >= 10000:
+            if len(unit_str) >= 18000:
                 results.append(unit_str)
                 unit_str = ""
                 break

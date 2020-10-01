@@ -6,7 +6,7 @@
 # author: aws-solutions-builder@
 AWSTemplateFormatVersion: 2010-09-09
 
-Description: () - Textract Macie POC - Master Template
+Description: Scrub pii from text documents using comprehend medical
 
 Parameters:
   # Sample parameter 1
@@ -36,21 +36,74 @@ Mappings:
 
 Resources:
   RawDocumentBucket:
+    DependsOn:
+      - RawBucketQueuePolicy
     Type: AWS::S3::Bucket
     Properties: 
       BucketName: !Ref RawDocumentBucketName
       NotificationConfiguration:
-        LambdaConfigurations:
-        - Event: 's3:ObjectCreated:*'
-          Function: !GetAtt RunTextractFunction.Arn
-  RawDocumentBucketPermission:
-    Type: AWS::Lambda::Permission
+#        LambdaConfigurations:
+#        - Event: 's3:ObjectCreated:*'
+#          Function: !GetAtt RunTextractFunction.Arn
+         QueueConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: 'Prefix'
+                    Value: 'New/'
+            Queue: !GetAtt RawBucketQueue.Arn
+
+
+#  RawDocumentBucketPermission:
+#    Type: AWS::Lambda::Permission
+#    Properties:
+#      Action: 'lambda:InvokeFunction'
+#      FunctionName: !Ref RunTextractFunction
+#      Principal: s3.amazonaws.com
+#      SourceAccount: !Ref "AWS::AccountId"
+#      SourceArn: !Sub "arn:aws:s3:::${RawDocumentBucketName}"
+#  RawBucketQueuePermission:
+#    Type: AWS::Lambda::Permission
+#    Properties:
+#      Action: 'lambda:InvokeFunction'
+#      FunctionName: !Ref RunTextractFunction
+#      Principal: sqs.amazonaws.com
+#      SourceAccount: !Ref "AWS::AccountId"
+#      SourceArn: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${RawDocumentBucketName}-event-queue"
+  RawBucketQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    DependsOn:
+      - RawBucketQueue
     Properties:
-      Action: 'lambda:InvokeFunction'
-      FunctionName: !Ref RunTextractFunction
-      Principal: s3.amazonaws.com
-      SourceAccount: !Ref "AWS::AccountId"
-      SourceArn: !Sub "arn:aws:s3:::${RawDocumentBucketName}"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "s3.amazonaws.com"
+            Action:
+              - SQS:SendMessage
+            # Target a wildcard resource name based on the same format as QueueName
+            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${RawDocumentBucketName}-event-queue"
+            Condition:
+              ArnLike:
+                # Static BucketName used to avoid circular dependency with S3 bucket
+                aws:SourceArn: !Sub "arn:aws:s3:::${RawDocumentBucketName}"
+      Queues:
+        - !Ref RawBucketQueue
+  RawBucketQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${RawDocumentBucketName}-event-queue'
+      VisibilityTimeout: 120
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RawBucketDLQ.Arn
+        maxReceiveCount: 5
+  RawBucketDLQ:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: !Sub '${RawDocumentBucketName}-event-dlq'
   ExtractedDocumentBucket:
     Type: AWS::S3::Bucket
     Properties: 
@@ -62,6 +115,13 @@ Resources:
   ##
   #  RunTextractFunction
   ##
+  RunTextractFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt RawBucketQueue.Arn
+      FunctionName: !GetAtt RunTextractFunction.Arn
   RunTextractFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -103,7 +163,14 @@ Resources:
             - sns:ListSubscriptionsByTopic
             - sns:Recieve
             Resource: 
-            - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:textract-macie-poc-analysis-topic
+            - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:scrub-pii-textract-analysis-topic
+          - Effect: "Allow"
+            Action:
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+            Resource: !GetAtt RawBucketQueue.Arn
   RunTextractFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -119,7 +186,7 @@ Resources:
         S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
         S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
       Runtime: python3.8
-      Timeout: 300
+      Timeout: 30
   ##
   #  GetTextractResultsFunction
   ##
@@ -281,8 +348,8 @@ Resources:
   TextractAnalysisTopic:
     Type: AWS::SNS::Topic
     Properties: 
-      DisplayName: textract-macie-poc-analysis-topic
-      TopicName: textract-macie-poc-analysis-topic
+      DisplayName: scrub-pii-textract-analysis-topic
+      TopicName: scrub-pii-textract-analysis-topic
       Subscription: 
        -  Endpoint: !GetAtt GetTextractJobStatusFunction.Arn
           Protocol: lambda

@@ -24,3 +24,5 @@
 **/.DS_Store
 **/.vscode
 .c9
+
+.idea/

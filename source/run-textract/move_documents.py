@@ -29,9 +29,11 @@ def lambda_handler(event, context):
         job_id = event["job_id"]
         tmp_document = event["document"]
         file_name = event["file_name"]
+        file_path = file_name.split("/")
+
         destination_document = {
             "Bucket": str(os.environ.get('DESTINATION_BUCKET')),
-            "Key": f"{job_id}/extracted.txt"
+            "Key": f"{job_id}/{file_path[len(file_path)-1]}.txt"
         }
         response = s3.copy_object(Bucket=destination_document["Bucket"], Key=destination_document["Key"],
                                   CopySource=tmp_document, Metadata={
