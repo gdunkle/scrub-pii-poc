@@ -21,13 +21,20 @@ import os
 import traceback
 import sys
 import boto3
+from botocore.config import Config
 
 
 def lambda_handler(event, context):
     try:
         logging.debug(event)
-        comprehend_medical = boto3.client('comprehendmedical')
-        textract = boto3.client('textract')
+        config = Config(
+            retries={
+                'max_attempts': 10,
+                'mode': 'standard'
+            }
+        )
+        comprehend_medical = boto3.client('comprehendmedical', config)
+        textract = boto3.client('textract', config)
 
         s3 = boto3.client('s3')
         logging.debug(event)

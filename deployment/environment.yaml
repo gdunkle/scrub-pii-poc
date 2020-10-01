@@ -96,7 +96,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub '${RawDocumentBucketName}-event-queue'
-      VisibilityTimeout: 120
+      VisibilityTimeout: 180
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt RawBucketDLQ.Arn
         maxReceiveCount: 5

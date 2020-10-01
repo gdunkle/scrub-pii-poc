@@ -21,34 +21,43 @@ import os
 import traceback
 import sys
 import boto3
+from botocore.config import Config
+
 
 def lambda_handler(event, context):
     try:
         logging.debug(event)
-        textract_notification_msg=json.loads(event["Records"][0]["Sns"]["Message"])
-        status=textract_notification_msg["Status"]
-        job_id=textract_notification_msg["JobId"]
+        config = Config(
+            retries={
+                'max_attempts': 10,
+                'mode': 'standard'
+            }
+        )
+        textract_notification_msg = json.loads(event["Records"][0]["Sns"]["Message"])
+        status = textract_notification_msg["Status"]
+        job_id = textract_notification_msg["JobId"]
         original_file_name = textract_notification_msg["DocumentLocation"]["S3ObjectName"]
-        if status=="SUCCEEDED":
-            
+        if status == "SUCCEEDED":
+
             input = {
-                "job_id":job_id,
+                "job_id": job_id,
                 "next_token": None,
                 "continue": "true",
                 "document": None,
                 "file_name": original_file_name
             }
-            step_functions = boto3.client('stepfunctions')
+            step_functions = boto3.client('stepfunctions',config)
             step_function_arn = str(os.environ.get('STEP_FUNCTION'))
-            step_function_execution_result=step_functions.start_execution(stateMachineArn=step_function_arn,name=job_id,input=json.dumps(input))
+            step_function_execution_result = step_functions.start_execution(stateMachineArn=step_function_arn,
+                                                                            name=job_id, input=json.dumps(input))
             result = {
                 'statusCode': '200',
-                'body':  {'status': status,"job_id":job_id,"step_function": step_function_execution_result}
+                'body': {'status': status, "job_id": job_id, "step_function": step_function_execution_result}
             }
         else:
-             result = {
+            result = {
                 'statusCode': '500',
-                'body':  {'status': status,"job_id":job_id}
+                'body': {'status': status, "job_id": job_id}
             }
         logging.info("Result: %s" % result)
         return result
@@ -57,20 +66,21 @@ def lambda_handler(event, context):
         logging.error('lambda_handler trace: %s' % traceback.format_exc())
         result = {
             'statusCode': '500',
-            'body':  {'message': 'error'}
+            'body': {'message': 'error'}
         }
         return json.dumps(result)
-    
+
 
 def init_logger():
     global log_level
     log_level = str(os.environ.get('LOG_LEVEL')).upper()
     if log_level not in [
-                            'DEBUG', 'INFO',
-                            'WARNING', 'ERROR',
-                            'CRITICAL'
-                        ]:
+        'DEBUG', 'INFO',
+        'WARNING', 'ERROR',
+        'CRITICAL'
+    ]:
         log_level = 'ERROR'
     logging.getLogger().setLevel(log_level)
+
 
 init_logger()

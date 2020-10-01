@@ -21,6 +21,7 @@ import os
 import traceback
 import sys
 import boto3
+from botocore.config import Config
 
 
 def lambda_handler(event, context):
@@ -36,8 +37,15 @@ def lambda_handler(event, context):
                 bucket_region = s3_records['awsRegion']
 
                 session = boto3.session.Session(region_name=bucket_region)
-                textract = session.client('textract')
-                logging.info(f"Running Textract on {bucket_name}/{file_key} and posting to topic {os.environ.get('TOPIC_ARN')} with role {os.environ.get('ROLE_ARN')}")
+                config = Config(
+                    retries={
+                        'max_attempts': 10,
+                        'mode': 'standard'
+                    }
+                )
+                textract = session.client('textract', config)
+                logging.info(
+                    f"Running Textract on {bucket_name}/{file_key} and posting to topic {os.environ.get('TOPIC_ARN')} with role {os.environ.get('ROLE_ARN')}")
                 response = textract.start_document_text_detection(
                     DocumentLocation={
                         'S3Object': {
