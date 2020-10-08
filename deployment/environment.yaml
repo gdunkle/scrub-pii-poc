@@ -186,6 +186,8 @@ Resources:
         S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
         S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
       Runtime: python3.8
+      Layers:
+        - !Ref ScrubPiiLayer
       Timeout: 30
   ##
   #  GetTextractResultsFunction
@@ -216,7 +218,8 @@ Resources:
               - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
           - Effect: Allow
             Action:
-            - comprehendmedical:DetectPHI 
+            - comprehendmedical:DetectPHI
+            - comprehend:DetectPiiEntities
             Resource: '*'
           - Effect: Allow
             Action:
@@ -243,6 +246,8 @@ Resources:
         S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
         S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
       Runtime: python3.8
+      Layers:
+        - !Ref ScrubPiiLayer
       Timeout: 300
   ##
   #  GetTextractJobStatusFunction
@@ -293,6 +298,8 @@ Resources:
         S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
         S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
       Runtime: python3.8
+      Layers:
+        - !Ref ScrubPiiLayer
       Timeout: 300
   ##
   #  MoveDocumentsFunction
@@ -342,6 +349,8 @@ Resources:
         S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
         S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
       Runtime: python3.8
+      Layers:
+        - !Ref ScrubPiiLayer
       Timeout: 300
    
   
@@ -453,9 +462,42 @@ Resources:
         IncludeExecutionData: true
         Level: ALL
       RoleArn: !GetAtt WriteTextractResultsStateMachineRole.Arn
+  ScrubPiiLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - python3.8
+      Content:
+        S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%LAYER_FILE_NAME%%"]]
+      Description: Layer for scrub-pii-poc
+      LayerName: scrub-pii-poc-layer
   ###
   # CloudWatch Monitors and Dashboard
   ###
+  MonitorNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: scrub-pii-monitor-notification-topic
+      TopicName: scrub-pii-monitor-notification-topic
+  DLQMonitor:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'Alert if messsages land in the  DLQ'
+      AlarmName: !Sub "${RawBucketDLQ.QueueName}-alarm"
+      AlarmActions:
+        - !Ref MonitorNotificationTopic
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Sum
+      Period: 180
+      EvaluationPeriods: 1
+      Threshold: 1
+      TreatMissingData: notBreaching
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${RawBucketDLQ.QueueName}"
   Dashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:

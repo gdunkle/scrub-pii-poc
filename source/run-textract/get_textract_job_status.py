@@ -46,7 +46,7 @@ def lambda_handler(event, context):
                 "document": None,
                 "file_name": original_file_name
             }
-            step_functions = boto3.client('stepfunctions',config)
+            step_functions = boto3.client('stepfunctions', config=config)
             step_function_arn = str(os.environ.get('STEP_FUNCTION'))
             step_function_execution_result = step_functions.start_execution(stateMachineArn=step_function_arn,
                                                                             name=job_id, input=json.dumps(input))

@@ -8,8 +8,8 @@ echo $SOLUTION_NAME
 echo $DIST_OUTPUT_BUCKET
 echo $VERSION
 echo $AWS_REGION
-
-./build-s3-dist.sh $DIST_OUTPUT_BUCKET $SOLUTION_NAME $VERSION
+DEPENDENCY_EXCLUDE_LIST=["aws_cdk","dist-info","pip","jsii","docutils","pkg_resources","setuptools","test","tests","s3transfer"]
+./build-s3-dist.sh $DIST_OUTPUT_BUCKET $SOLUTION_NAME $VERSION $DEPENDENCY_EXCLUDE_LIST
 aws s3 cp ./regional-s3-assets/ s3://$DIST_OUTPUT_BUCKET-$AWS_REGION/$SOLUTION_NAME/$VERSION/ --recursive --acl bucket-owner-full-control
 
 echo "Deploying stack $SOLUTION_NAME"

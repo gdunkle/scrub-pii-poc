@@ -33,8 +33,8 @@ def lambda_handler(event, context):
                 'mode': 'standard'
             }
         )
-        comprehend_medical = boto3.client('comprehendmedical', config)
-        textract = boto3.client('textract', config)
+        comprehend = boto3.client('comprehend', config=config)
+        textract = boto3.client('textract', config=config)
 
         s3 = boto3.client('s3')
         logging.debug(event)
@@ -54,7 +54,7 @@ def lambda_handler(event, context):
         blocks = response["Blocks"]
         processed_blocks = [x for x in [get_block_value(block) for block in blocks] if x is not None]
         units = group_blocks_into_units(processed_blocks, 0)
-        scrubbed_data = [scrub_data(unit, comprehend_medical) for unit in units]
+        scrubbed_data = [scrub_data(unit, comprehend) for unit in units]
         logging.debug(scrubbed_data)
 
         text = append_results_to_working_document_text(document, scrubbed_data, s3)
@@ -106,15 +106,15 @@ def get_block_value(block: dict) -> str:
     return block["Text"] if block_type in ["LINE"] else None
 
 
-def scrub_data(unit, comprehend_medical):
-    response = comprehend_medical.detect_phi(Text=unit)
+def scrub_data(unit, comprehend):
+    response = comprehend.detect_pii_entities(Text=unit, LanguageCode='en')
     if len(response["Entities"]) > 0:
         phi_values_to_replace = {}
         for entity in response["Entities"]:
             if entity["Type"] in phi_values_to_replace:
-                phi_values_to_replace[entity["Type"]].append(entity["Text"])
+                phi_values_to_replace[entity["Type"]].append(unit[entity["BeginOffset"]:entity["EndOffset"]])
             else:
-                phi_values_to_replace[entity["Type"]] = [entity["Text"]]
+                phi_values_to_replace[entity["Type"]] = [unit[entity["BeginOffset"]:entity["EndOffset"]]]
 
         unit = replace_phi_values(unit, phi_values_to_replace)
     else:
@@ -142,7 +142,7 @@ def group_blocks_into_units(processed_blocks, index):
         for i in range(index, len(processed_blocks)):
             block = processed_blocks[i]
             unit_str = block if len(unit_str) == 0 else "%s\n%s" % (unit_str, block)
-            if len(unit_str) >= 18000:
+            if len(unit_str) > 5000:
                 results.append(unit_str)
                 unit_str = ""
                 break

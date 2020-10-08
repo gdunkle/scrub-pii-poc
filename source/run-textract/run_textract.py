@@ -43,7 +43,7 @@ def lambda_handler(event, context):
                         'mode': 'standard'
                     }
                 )
-                textract = session.client('textract', config)
+                textract = session.client('textract', config=config)
                 logging.info(
                     f"Running Textract on {bucket_name}/{file_key} and posting to topic {os.environ.get('TOPIC_ARN')} with role {os.environ.get('ROLE_ARN')}")
                 response = textract.start_document_text_detection(
