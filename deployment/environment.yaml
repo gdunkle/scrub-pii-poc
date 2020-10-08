@@ -483,7 +483,7 @@ Resources:
   DLQMonitor:
     Type: 'AWS::CloudWatch::Alarm'
     Properties:
-      AlarmDescription: 'Alert if messsages land in the  DLQ'
+      AlarmDescription: 'Alert if messages land in the  DLQ'
       AlarmName: !Sub "${RawBucketDLQ.QueueName}-alarm"
       AlarmActions:
         - !Ref MonitorNotificationTopic
@@ -498,6 +498,24 @@ Resources:
       Dimensions:
         - Name: QueueName
           Value: !Sub "${RawBucketDLQ.QueueName}"
+  QueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref MonitorNotificationTopic
+      AlarmName: !Sub "${RawBucketQueue.QueueName}-alarm"
+      AlarmDescription: If we see messages sitting in the queue for longer than 60 minutes let us know
+      MetricName: ApproximateAgeOfOldestMessage
+      Namespace: AWS/SQS
+      Statistic: Sum
+      Period: 7200
+      EvaluationPeriods: 1
+      Threshold: 3600
+      TreatMissingData: notBreaching
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${RawBucketQueue.QueueName}"
   Dashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
