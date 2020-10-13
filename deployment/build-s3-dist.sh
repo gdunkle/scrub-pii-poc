@@ -84,9 +84,12 @@ echo "--------------------------------------------------------------------------
 echo "[Build] Run Textract Function"
 echo "------------------------------------------------------------------------------"
 cd $source_dir/run-textract
-
-
 zip $build_dist_dir/$ZIP_FILE_NAME ./*.py
+
+#MoveDocumentsFunction_Sha256=$(shasum -a 256 -b $build_dist_dir/$ZIP_FILE_NAME | tr -s ' ' | cut -d ' ' -f 1)
+#replace="s/%%MoveDocumentsFunction_Sha256%%/$MoveDocumentsFunction_Sha256/g"
+#echo "sed -i '' -e $replace $template_dist_dir/*.template"
+#sed -i '' -e $replace $template_dist_dir/*.template
 
 echo "------------------------------------------------------------------------------"
 echo "[Build] Depending Layer"

@@ -189,6 +189,72 @@ Resources:
       Layers:
         - !Ref ScrubPiiLayer
       Timeout: 30
+  RunTextractFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      Description: !Sub "Latest version of ${RunTextractFunction}"
+      FunctionName: !GetAtt RunTextractFunction.Arn
+  ##
+  #  S3ObjectsToSqsFunction
+  ##
+  S3ObjectsToSqsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub S3ObjectsToSqsFunction-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${RawDocumentBucketName}
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt RawBucketQueue.Arn
+  S3ObjectsToSqsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Pages through the object in an s3 bucket
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+          SQS_QUEUE_URL: !Ref RawBucketQueue
+          S3_MAX_KEYS: 1000
+          SQS_MAX_RECORDS_LENGTH: 10
+      Handler: s3_objects_to_sqs.lambda_handler
+      Role: !GetAtt S3ObjectsToSqsFunctionRole.Arn
+      Code:
+        S3Bucket: !Join ["-", [!FindInMap ["SourceCode", "General", "S3Bucket"], Ref: "AWS::Region"]]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+      Runtime: python3.8
+      Layers:
+        - !Ref ScrubPiiLayer
+      Timeout: 300
+  S3ObjectsToSqsFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      Description: !Sub "Latest version of ${S3ObjectsToSqsFunction}"
+      FunctionName: !GetAtt S3ObjectsToSqsFunction.Arn
   ##
   #  GetTextractResultsFunction
   ##
@@ -249,6 +315,11 @@ Resources:
       Layers:
         - !Ref ScrubPiiLayer
       Timeout: 300
+  GetTextractResultsFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      Description: !Sub "Latest version of ${GetTextractResultsFunction}"
+      FunctionName: !GetAtt GetTextractResultsFunction.Arn
   ##
   #  GetTextractJobStatusFunction
   ##
@@ -301,6 +372,11 @@ Resources:
       Layers:
         - !Ref ScrubPiiLayer
       Timeout: 300
+  GetTextractJobStatusFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      Description: !Sub "Latest version of ${GetTextractJobStatusFunction}"
+      FunctionName: !GetAtt GetTextractJobStatusFunction.Arn
   ##
   #  MoveDocumentsFunction
   ##
@@ -352,7 +428,11 @@ Resources:
       Layers:
         - !Ref ScrubPiiLayer
       Timeout: 300
-   
+  MoveDocumentsFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      Description: !Sub "Latest version of ${MoveDocumentsFunction}"
+      FunctionName: !GetAtt MoveDocumentsFunction.Arn
   
   TextractAnalysisTopic:
     Type: AWS::SNS::Topic
@@ -462,6 +542,100 @@ Resources:
         IncludeExecutionData: true
         Level: ALL
       RoleArn: !GetAtt WriteTextractResultsStateMachineRole.Arn
+  ScrubPiiInitialLoadStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/states/ScrubPiiInitialLoadStateMachine
+      RetentionInDays: 1
+  ScrubPiiInitialLoadStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub ScrubPiiInitialLoadStateMachine-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt S3ObjectsToSqsFunction.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+
+                Resource: '*'
+  ScrubPiiInitialLoadStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: ScrubPiiInitialLoadStateMachine
+      DefinitionString: |-
+        {
+          "StartAt": "SendS3ObjectsToSqs",
+          "States": {
+            "SendS3ObjectsToSqs": {
+              "Type": "Task",
+              "Resource": "${S3ObjectsToSqsFunction}",
+              "Next": "AreAllResultsProccessed"
+            },
+            "AreAllResultsProccessed":{
+              "Type":"Choice",
+              "Choices": [
+                    {
+                      "And": [
+                       {
+                         "Variable": "$.NextContinuationToken",
+                         "IsPresent": true
+                       },
+                       {
+                         "Variable": "$.NextContinuationToken",
+                         "IsNull": false
+                       }
+                      ],
+                      "Next": "SendS3ObjectsToSqs"
+                    }
+                ],
+                "Default": "Done"
+            },
+            "Done": {
+                    "Type": "Pass",
+                    "End": true
+
+             }
+          }
+        }
+      DefinitionSubstitutions:
+        S3ObjectsToSqsFunction: !GetAtt S3ObjectsToSqsFunction.Arn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt ScrubPiiInitialLoadStateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      RoleArn: !GetAtt ScrubPiiInitialLoadStateMachineRole.Arn
   ScrubPiiLayer:
     Type: AWS::Lambda::LayerVersion
     Properties:
